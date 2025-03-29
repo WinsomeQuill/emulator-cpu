@@ -107,10 +107,22 @@ impl CPU {
 
     // Запись данных в память
     fn write_memory(&mut self, addr: usize, data: &[u8]) {
-        if addr + data.len() > self.memory.len() {
+        let size = data.len();
+        assert!(size & 0x3 == 0, "memory size must be multiple of 4");
+
+        let next_power = size.next_power_of_two();
+        let offset = next_power - size;
+        let aligned_size = size + offset;
+
+        // Выравнивание адреса
+        let align = next_power;
+        let aligned_addr = (addr + (align - 1)) & !(align - 1);
+
+        if aligned_addr + aligned_size > self.memory.len() {
             panic!("Memory access out of bounds");
         }
-        self.memory[addr..addr + data.len()].copy_from_slice(data);
+
+        self.memory[aligned_addr..aligned_addr + size].copy_from_slice(data);
     }
 
     // Чтение данных из памяти
@@ -255,8 +267,11 @@ impl CPU {
 }
 
 fn main() {
-    // Создаем эмулятор с 1 МБ памяти
+    // Создаем эмулятор с 1Kb памяти
     let mut cpu = CPU::new(1024);
+
+    cpu.write_memory(0, &vec![5u8; 52]);
+    let mem = cpu.read_memory(0, 128).to_vec();
 
     // Простая программа на ассемблере
     let program = [
@@ -274,13 +289,14 @@ fn main() {
 
     // Выводим состояние регистров после выполнения
     println!("Registers after execution:");
-    println!("EAX: {}", cpu.regs.eax);
-    println!("EBX: {}", cpu.regs.ebx);
-    println!("ECX: {}", cpu.regs.ecx);
-    println!("EDX: {}", cpu.regs.edx);
-    println!("ESP: {:X}", cpu.regs.esp);
-    println!("EBP: {:X}", cpu.regs.ebp);
-    println!("EIP: {:X}", cpu.regs.eip);
-    println!("EFLAGS: {:X}", cpu.regs.eflags);
+    println!("EAX: {:08X}", cpu.regs.eax);
+    println!("EBX: {:08X}", cpu.regs.ebx);
+    println!("ECX: {:08X}", cpu.regs.ecx);
+    println!("EDX: {:08X}", cpu.regs.edx);
+    println!("ESP: {:08X}", cpu.regs.esp);
+    println!("EBP: {:08X}", cpu.regs.ebp);
+    println!("EIP: {:08X}", cpu.regs.eip);
+    println!("EFLAGS: {:08X}", cpu.regs.eflags);
     println!("memory: {:?}", cpu.memory);
+    println!("read mem: {:?}", &mem);
 }
