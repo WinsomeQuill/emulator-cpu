@@ -60,11 +60,66 @@ impl Registers {
     }
 }
 
+#[derive(Debug, Clone)]
+enum SectionRes {
+    resb, // 1 byte
+    resw, // 2 bytes (1 word)
+    resd, // 4 bytes (2 word)
+    resq, // 8 bytes (4 word)
+}
+
+#[derive(Debug, Clone)]
+enum Section {
+    Bss {
+        name: String,
+        res: SectionRes,
+        size: u32,
+        start_addr: u32,
+    },
+    Data {
+        name: String,
+        res: SectionRes,
+        values: Vec<u8>,
+        start_addr: u32,
+    },
+    Text {
+        name: String,
+        start_addr: u32,
+    },
+}
+
+impl Section {
+    fn name(&self) -> &str {
+        match self {
+            Section::Bss { name, .. } => name,
+            Section::Data { name, .. } => name,
+            Section::Text { name, .. } => name,
+        }
+    }
+
+    fn start_addr(&self) -> u32 {
+        match self {
+            Section::Bss { start_addr, .. } => *start_addr,
+            Section::Data { start_addr, .. } => *start_addr,
+            Section::Text { start_addr, .. } => *start_addr,
+        }
+    }
+
+    fn size(&self) -> u32 {
+        match self {
+            Section::Bss { size, .. } => *size,
+            Section::Data { values, .. } => values.len() as u32,
+            Section::Text { .. } => 0,
+        }
+    }
+}
+
 // Состояние процессора
 struct CPU {
     regs: Registers,
     memory: Vec<u8>,
     running: bool,
+    sections: Vec<Section>,
 }
 
 impl CPU {
@@ -73,21 +128,137 @@ impl CPU {
             regs: Registers::new(),
             memory: vec![0; memory_size],
             running: false,
+            sections: vec![],
         }
+    }
+
+    fn allocate_memory_for_sections(&mut self) {
+        let mut current_addr = 0x1000;
+
+        for section in &mut self.sections.clone() {
+            match section {
+                Section::Bss {
+                    start_addr, size, ..
+                } => {
+                    *start_addr = current_addr;
+                    self.memory[current_addr as usize..(current_addr + *size) as usize].fill(0);
+                    current_addr += *size;
+                }
+
+                Section::Data {
+                    start_addr, values, ..
+                } => {
+                    *start_addr = current_addr;
+                    self.write_memory(current_addr as usize, values);
+                    current_addr += values.len() as u32;
+                }
+
+                Section::Text { start_addr, .. } => {
+                    *start_addr = current_addr;
+                    // TODO: Подумать как загружать text
+                }
+            }
+        }
+    }
+
+    fn section(&mut self, section: &[&str]) {
+        if section.len() < 2 {
+            panic!("Invalid section");
+        }
+
+        match section[0] {
+            ".bss" => {
+                if section.len() != 4 {
+                    panic!("Invalid .bss section syntax");
+                }
+
+                let res = match section[2] {
+                    "resb" => SectionRes::resb,
+                    "resw" => SectionRes::resw,
+                    "resd" => SectionRes::resd,
+                    "resq" => SectionRes::resq,
+                    _ => panic!("Invalid reservation: {}", section[2]),
+                };
+
+                let size = section[3].parse::<u32>().unwrap();
+
+                self.sections.push(Section::Bss {
+                    name: section[1].to_string(),
+                    res,
+                    size,
+                    start_addr: 0, // Будет установлено при аллокации
+                });
+            }
+
+            ".data" => {
+                // TODO: Сделать парсинг инициализированных данных
+                //let values = parse_data_section(&section[2..]);
+
+                self.sections.push(Section::Data {
+                    name: section[1].to_string(),
+                    res: SectionRes::resb, // По умолчанию, можно уточнять
+                    values: vec![],
+                    start_addr: 0,
+                });
+            }
+
+            ".text" => {
+                self.sections.push(Section::Text {
+                    name: section[1].to_string(),
+                    start_addr: 0,
+                });
+            }
+
+            _ => panic!("Unknown section: {}", section[0]),
+        }
+    }
+
+    fn get_var_address(&self, name: &str) -> Option<u32> {
+        self.sections
+            .iter()
+            .find(|s| s.name() == name)
+            .map(|s| s.start_addr())
+    }
+
+    fn read_from_section(&self, name: &str, offset: usize, size: usize) -> &[u8] {
+        let section = self
+            .sections
+            .iter()
+            .find(|s| s.name() == name)
+            .unwrap_or_else(|| panic!("Section {} not found", name));
+
+        let addr = section.start_addr() as usize + offset;
+        &self.memory[addr..addr + size]
     }
 
     // Добавляем таблицу системных вызовов
     fn syscall_table(&mut self, num: u32) {
         // https://gist.github.com/GabriOliv/a9411fa771a1e5d94105cb05cbaebd21
         match num {
+            // Exit
+            1 => self.running = false,
             // Read mode
             3 => {
-                // TODO: А буфер то не настоящий! Нужно читать размер из EDX.
-                // Желательно еще читать ECX
+                match self.regs.ebx {
+                    0 => {
+                        let buffer_addr = self.regs.ecx as usize;
+                        let buffer_size = self.regs.edx as usize;
 
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input).unwrap();
-                self.regs.eax = input.trim().parse().unwrap_or(0);
+                        let mut input = String::new();
+                        std::io::stdin().read_line(&mut input).unwrap();
+                        let input_bytes = input.as_bytes();
+
+                        // Записываем только то, что помещается в буфер
+                        let bytes_to_copy = std::cmp::min(input_bytes.len(), buffer_size);
+                        self.memory[buffer_addr..buffer_addr + bytes_to_copy]
+                            .copy_from_slice(&input_bytes[..bytes_to_copy]);
+
+                        // Возвращаем количество прочитанных байт в EAX
+                        self.regs.eax = bytes_to_copy as u32;
+                        dbg!(&self.regs.ecx);
+                    }
+                    _ => panic!("Unknown ebx: {:08X}", self.regs.ebx),
+                };
             }
             // Write mode
             4 => {
@@ -141,11 +312,14 @@ impl CPU {
         }
 
         match parts[0].to_lowercase().as_str() {
+            "section" => self.section(&parts[1..]),
+
             "mov" => self.mov(&parts[1..]),
             "add" => self.add(&parts[1..]),
             "sub" => self.sub(&parts[1..]),
             "jmp" => self.jmp(&parts[1..]),
             "syscall" => self.syscall(),
+            "xor" => self.xor(&parts[1..]),
             "nop" => {} // Ничего не делаем
             "hlt" => self.running = false,
             _ => panic!("Unknown instruction: {}", parts[0]),
@@ -165,6 +339,21 @@ impl CPU {
 
         let dest = operands[0];
         let src = operands[1];
+
+        if src.starts_with("[") && src.ends_with("]") {
+            let reg_name = &src[1..src.len() - 1];
+            let addr = self.regs.get(reg_name) as usize;
+            let value = u32::from_le_bytes(self.read_memory(addr, 4).try_into().unwrap());
+            self.regs.set(dest, value);
+            return;
+        }
+
+        if let Some(addr) = self.get_var_address(&src) {
+            dbg!(&src);
+            dbg!(addr);
+            self.regs.set(dest, addr);
+            return;
+        }
 
         // Проверяем, является ли src числом
         if let Ok(value) = src.parse::<u32>() {
@@ -237,6 +426,27 @@ impl CPU {
         self.regs.eip = target;
     }
 
+    fn xor(&mut self, operands: &[&str]) {
+        if operands.len() != 2 {
+            panic!("XOR requires 2 operands");
+        }
+
+        let dest = operands[0];
+        let src = operands[1];
+
+        let dest_value = self.regs.get(dest);
+        let src_value = if let Ok(value) = src.parse::<u32>() {
+            value
+        } else {
+            self.regs.get(src)
+        };
+
+        let result = src_value ^ dest_value;
+        self.regs.set(dest, result);
+
+        self.update_flags(result);
+    }
+
     // Обновление флагов
     fn update_flags(&mut self, result: u32) {
         // Zero flag
@@ -282,6 +492,10 @@ fn main() {
         "mov ecx eax",
         "mov eax 4",
         "syscall",
+        "mov ebx 1",
+        "mov eax 1",   // exit
+        "xor ebx ebx", // exit code
+        "syscall",
     ];
 
     // Запускаем программу
@@ -299,4 +513,70 @@ fn main() {
     println!("EFLAGS: {:08X}", cpu.regs.eflags);
     println!("memory: {:?}", cpu.memory);
     println!("read mem: {:?}", &mem);
+    println!("Exit code: {:08X}", cpu.regs.ebx);
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn set_get_regs() {
+        let mut cpu = CPU::new(1024);
+
+        let program = [
+            "mov eax 10",
+            "mov ebx 20",
+            "add eax ebx",
+            "sub eax 5",
+            "mov ecx eax",
+            "mov edx 0",
+            "xor edx 1",
+        ];
+
+        cpu.run(&program);
+
+        assert_eq!(cpu.regs.eax, 25);
+        assert_eq!(cpu.regs.ebx, 20);
+        assert_eq!(cpu.regs.ecx, 25);
+        assert_eq!(cpu.regs.edx, 1);
+    }
+
+    #[test]
+    fn write_read_memory() {
+        let mut cpu = CPU::new(1024);
+
+        cpu.write_memory(0, &vec![1; 16]);
+
+        let program = ["mov eax 1", "xor eax 0", "syscall"];
+
+        cpu.run(&program);
+
+        assert_eq!(cpu.read_memory(0, 16), vec![1; 16]);
+    }
+
+    #[ignore = "Трубется ввод данных с клавиатуры"]
+    #[test]
+    fn read_stdin() {
+        let mut cpu = CPU::new(1024);
+
+        let program = [
+            "section .bss input_buffer resb 16",
+            "mov eax 3",
+            "mov ebx 0",
+            "mov ecx input_buffer",
+            "mov edx 16",
+            "syscall",
+            "hlt",
+        ];
+
+        cpu.allocate_memory_for_sections();
+        cpu.run(&program);
+
+        // TODO: Придумать mock для stdin
+
+        dbg!(&cpu.sections[0]);
+
+        assert_eq!(cpu.read_memory(0, 12), "hello world!".as_bytes());
+    }
 }
