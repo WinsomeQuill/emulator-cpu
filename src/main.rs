@@ -449,18 +449,34 @@ impl CPU {
 
     // Обновление флагов
     fn update_flags(&mut self, result: u32) {
-        // Zero flag
+        // Просто заметка о том, где и какие флаги лежат в памяти
+        // Криво ну и хрен с ним!
+        //
+        //  15 14 13 12  11   10    9    8    7    6   5   4  3   2  1   0
+        //  _______________________________________________________________
+        // |__|__|__|__| of | df | if | tf | sf | zf |_| af |_| pf |_| cf |
+        //
+
+        // Zero flag (zf)
         if result == 0 {
             self.regs.eflags |= 1 << 6; // ZF is bit 6
         } else {
             self.regs.eflags &= !(1 << 6);
         }
 
-        // Sign flag (для 32-битных чисел - бит 31)
+        // Sign flag (для 32-битных чисел - бит 31) (sf)
         if (result as i32) < 0 {
             self.regs.eflags |= 1 << 7; // SF is bit 7
         } else {
             self.regs.eflags &= !(1 << 7);
+        }
+
+        // Parity flag (pf)
+        let parity = result.count_ones() % 2 == 0;
+        if parity {
+            self.regs.eflags |= 1 << 2; // PF is bit 2
+        } else {
+            self.regs.eflags &= !(1 << 2);
         }
     }
 
