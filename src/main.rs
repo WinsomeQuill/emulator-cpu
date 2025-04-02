@@ -579,7 +579,7 @@ mod test {
         assert_eq!(cpu.read_memory(0, 16), vec![1; 16]);
     }
 
-    // #[ignore = "Трубется ввод данных с клавиатуры"]
+    #[ignore = "Трубется ввод данных с клавиатуры"]
     #[test]
     fn read_stdin() {
         let mut cpu = CPU::new(1024);
