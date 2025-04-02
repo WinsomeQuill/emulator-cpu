@@ -142,9 +142,8 @@ impl CPU {
                     start_addr, size, ..
                 } => {
                     *start_addr = current_addr;
-                    data_to_write.push((current_addr as usize, vec![0; 16]));
+                    data_to_write.push((current_addr as usize, vec![0; *size as usize]));
                     current_addr += *size;
-                    println!("current_addr: {current_addr}");
                 }
 
                 Section::Data {
@@ -153,7 +152,6 @@ impl CPU {
                     *start_addr = current_addr;
                     data_to_write.push((current_addr as usize, values.clone()));
                     current_addr += values.len() as u32;
-                    println!("current_addr: {current_addr}");
                 }
 
                 Section::Text { start_addr, .. } => {
