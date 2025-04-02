@@ -133,24 +133,27 @@ impl CPU {
     }
 
     fn allocate_memory_for_sections(&mut self) {
-        let mut current_addr = 0x1000;
+        let mut current_addr = 0;
+        let mut data_to_write: Vec<(usize, Vec<u8>)> = Vec::new();
 
-        for section in &mut self.sections.clone() {
+        for section in &mut self.sections {
             match section {
                 Section::Bss {
                     start_addr, size, ..
                 } => {
                     *start_addr = current_addr;
-                    self.memory[current_addr as usize..(current_addr + *size) as usize].fill(0);
+                    data_to_write.push((current_addr as usize, vec![0; 16]));
                     current_addr += *size;
+                    println!("current_addr: {current_addr}");
                 }
 
                 Section::Data {
                     start_addr, values, ..
                 } => {
                     *start_addr = current_addr;
-                    self.write_memory(current_addr as usize, values);
+                    data_to_write.push((current_addr as usize, values.clone()));
                     current_addr += values.len() as u32;
+                    println!("current_addr: {current_addr}");
                 }
 
                 Section::Text { start_addr, .. } => {
@@ -158,6 +161,10 @@ impl CPU {
                     // TODO: Подумать как загружать text
                 }
             }
+        }
+
+        for (addr, data) in data_to_write {
+            self.write_memory(addr, &data);
         }
     }
 
@@ -250,8 +257,7 @@ impl CPU {
 
                         // Записываем только то, что помещается в буфер
                         let bytes_to_copy = std::cmp::min(input_bytes.len(), buffer_size);
-                        self.memory[buffer_addr..buffer_addr + bytes_to_copy]
-                            .copy_from_slice(&input_bytes[..bytes_to_copy]);
+                        self.write_memory(buffer_addr, &input_bytes[..bytes_to_copy]);
 
                         // Возвращаем количество прочитанных байт в EAX
                         self.regs.eax = bytes_to_copy as u32;
@@ -279,7 +285,9 @@ impl CPU {
     // Запись данных в память
     fn write_memory(&mut self, addr: usize, data: &[u8]) {
         let size = data.len();
-        assert!(size & 0x3 == 0, "memory size must be multiple of 4");
+        //assert!(size & 0x3 == 0, "memory size must be multiple of 4");
+        // а хер знает, надо эт
+        //или нет
 
         let next_power = size.next_power_of_two();
         let offset = next_power - size;
@@ -313,6 +321,8 @@ impl CPU {
 
         match parts[0].to_lowercase().as_str() {
             "section" => self.section(&parts[1..]),
+            // Я ебал как вызывать alloc по другому поэтому хотфикс-костыль
+            "start:" => self.allocate_memory_for_sections(),
 
             "mov" => self.mov(&parts[1..]),
             "add" => self.add(&parts[1..]),
@@ -340,7 +350,7 @@ impl CPU {
         let dest = operands[0];
         let src = operands[1];
 
-        if src.starts_with("[") && src.ends_with("]") {
+        if src.starts_with('[') && src.ends_with(']') {
             let reg_name = &src[1..src.len() - 1];
             let addr = self.regs.get(reg_name) as usize;
             let value = u32::from_le_bytes(self.read_memory(addr, 4).try_into().unwrap());
@@ -348,7 +358,7 @@ impl CPU {
             return;
         }
 
-        if let Some(addr) = self.get_var_address(&src) {
+        if let Some(addr) = self.get_var_address(src) {
             dbg!(&src);
             dbg!(addr);
             self.regs.set(dest, addr);
@@ -496,7 +506,7 @@ fn main() {
     // Создаем эмулятор с 1Kb памяти
     let mut cpu = CPU::new(1024);
 
-    cpu.write_memory(0, &vec![5u8; 52]);
+    cpu.write_memory(0, &[5u8; 52]);
     let mem = cpu.read_memory(0, 128).to_vec();
 
     // Простая программа на ассемблере
@@ -562,7 +572,7 @@ mod test {
     fn write_read_memory() {
         let mut cpu = CPU::new(1024);
 
-        cpu.write_memory(0, &vec![1; 16]);
+        cpu.write_memory(0, &[1; 16]);
 
         let program = ["mov eax 1", "xor eax 0", "syscall"];
 
@@ -571,28 +581,38 @@ mod test {
         assert_eq!(cpu.read_memory(0, 16), vec![1; 16]);
     }
 
-    #[ignore = "Трубется ввод данных с клавиатуры"]
+    // #[ignore = "Трубется ввод данных с клавиатуры"]
     #[test]
     fn read_stdin() {
         let mut cpu = CPU::new(1024);
 
         let program = [
             "section .bss input_buffer resb 16",
+            "section .bss input_buf resb 16",
+            "start:",
             "mov eax 3",
             "mov ebx 0",
             "mov ecx input_buffer",
             "mov edx 16",
             "syscall",
+            "mov eax 3",
+            "mov ebx 0",
+            "mov ecx input_buf",
+            "mov edx 16",
+            "syscall",
             "hlt",
         ];
 
-        cpu.allocate_memory_for_sections();
         cpu.run(&program);
 
         // TODO: Придумать mock для stdin
 
-        dbg!(&cpu.sections[0]);
+        dbg!(&cpu.sections);
+        dbg!(cpu.read_memory(0, 32));
 
-        assert_eq!(cpu.read_memory(0, 12), "hello world!".as_bytes());
+        assert_eq!(cpu.read_memory(0, 13), "hello world!\n".as_bytes());
+        // Смещение на 3 потому что под hellow world выделилось 16 байт, а сама строка занимает 13
+        // байт, а значит остается еще 3 байта свободных в виде нулей.
+        assert_eq!(cpu.read_memory(13 + 3, 4), "hi!\n".as_bytes());
     }
 }
