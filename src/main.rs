@@ -40,7 +40,7 @@ impl Registers {
             "esp" => self.esp,
             "ebp" => self.ebp,
             "eip" => self.eip,
-            _ => panic!("Unknown register: {}", reg),
+            _ => self.crash(1, &format!("Unknown register: {}", reg)),
         }
     }
 
@@ -55,8 +55,25 @@ impl Registers {
             "esp" => self.esp = value,
             "ebp" => self.ebp = value,
             "eip" => self.eip = value,
-            _ => panic!("Unknown register: {}", reg),
+            _ => self.crash(1, &format!("Unknown register: {}", reg)),
         }
+    }
+
+    fn crash(&self, code: i32, message: &str) -> ! {
+        self.tracing();
+        eprintln!("{message}");
+        std::process::exit(code);
+    }
+
+    fn tracing(&self) {
+        println!("EAX: {:08X}", self.eax);
+        println!("EBX: {:08X}", self.ebx);
+        println!("ECX: {:08X}", self.ecx);
+        println!("EDX: {:08X}", self.edx);
+        println!("ESP: {:08X}", self.esp);
+        println!("EBP: {:08X}", self.ebp);
+        println!("EIP: {:08X}", self.eip);
+        println!("EFLAGS: {:08X}", self.eflags);
     }
 }
 
@@ -168,13 +185,13 @@ impl CPU {
 
     fn section(&mut self, section: &[&str]) {
         if section.len() < 2 {
-            panic!("Invalid section");
+            self.regs.crash(1, "Invalid section");
         }
 
         match section[0] {
             ".bss" => {
                 if section.len() != 4 {
-                    panic!("Invalid .bss section syntax");
+                    self.regs.crash(1, "Invalid .bss section syntax");
                 }
 
                 let res = match section[2] {
@@ -182,10 +199,18 @@ impl CPU {
                     "resw" => SectionRes::resw,
                     "resd" => SectionRes::resd,
                     "resq" => SectionRes::resq,
-                    _ => panic!("Invalid reservation: {}", section[2]),
+                    _ => self
+                        .regs
+                        .crash(1, &format!("Invalid reservation: {}", section[2])),
                 };
 
-                let size = section[3].parse::<u32>().unwrap();
+                let size = section[3]
+                    .parse::<u32>()
+                    .expect("Failed parse size of section");
+
+                if size == 0 {
+                    self.regs.crash(1, "Invalid size of section");
+                }
 
                 self.sections.push(Section::Bss {
                     name: section[1].to_string(),
@@ -214,7 +239,9 @@ impl CPU {
                 });
             }
 
-            _ => panic!("Unknown section: {}", section[0]),
+            _ => self
+                .regs
+                .crash(1, &format!("Unknown section: {}", section[0])),
         }
     }
 
@@ -230,7 +257,7 @@ impl CPU {
             .sections
             .iter()
             .find(|s| s.name() == name)
-            .unwrap_or_else(|| panic!("Section {} not found", name));
+            .unwrap_or_else(|| self.regs.crash(1, &format!("Section {} not found", name)));
 
         let addr = section.start_addr() as usize + offset;
         &self.memory[addr..addr + size]
@@ -261,14 +288,16 @@ impl CPU {
                         self.regs.eax = bytes_to_copy as u32;
                         dbg!(&self.regs.ecx);
                     }
-                    _ => panic!("Unknown ebx: {:08X}", self.regs.ebx),
+                    _ => self
+                        .regs
+                        .crash(1, &format!("Unknown ebx: {:08X}", self.regs.ebx)),
                 };
             }
             // Write mode
             4 => {
                 println!("Syscall 0: EAX = {}", self.regs.eax);
             }
-            _ => panic!("Unknown syscall: {}", num),
+            _ => self.regs.crash(1, &format!("Unknown syscall: {}", num)),
         }
     }
 
@@ -296,7 +325,7 @@ impl CPU {
         let aligned_addr = (addr + (align - 1)) & !(align - 1);
 
         if aligned_addr + aligned_size > self.memory.len() {
-            panic!("Memory access out of bounds");
+            self.regs.crash(1, "Memory access out of bounds");
         }
 
         self.memory[aligned_addr..aligned_addr + size].copy_from_slice(data);
@@ -305,7 +334,7 @@ impl CPU {
     // Чтение данных из памяти
     fn read_memory(&self, addr: usize, size: usize) -> &[u8] {
         if addr + size > self.memory.len() {
-            panic!("Memory read out of range");
+            self.regs.crash(1, "Memory read out of range");
         }
         &self.memory[addr..addr + size]
     }
@@ -330,7 +359,9 @@ impl CPU {
             "xor" => self.xor(&parts[1..]),
             "nop" => {} // Ничего не делаем
             "hlt" => self.running = false,
-            _ => panic!("Unknown instruction: {}", parts[0]),
+            _ => self
+                .regs
+                .crash(1, &format!("Unknown instruction: {}", parts[0])),
         }
 
         // Увеличиваем указатель инструкций, если не было прыжка
@@ -342,7 +373,7 @@ impl CPU {
     // Команда MOV
     fn mov(&mut self, operands: &[&str]) {
         if operands.len() != 2 {
-            panic!("MOV requires 2 operands");
+            self.regs.crash(1, "MOV requires 2 operands");
         }
 
         let dest = operands[0];
@@ -376,7 +407,7 @@ impl CPU {
     // Команда ADD
     fn add(&mut self, operands: &[&str]) {
         if operands.len() != 2 {
-            panic!("ADD requires 2 operands");
+            self.regs.crash(1, "ADD requires 2 operands");
         }
 
         let dest = operands[0];
@@ -399,7 +430,7 @@ impl CPU {
     // Команда SUB
     fn sub(&mut self, operands: &[&str]) {
         if operands.len() != 2 {
-            panic!("SUB requires 2 operands");
+            self.regs.crash(1, "SUB requires 2 operands");
         }
 
         let dest = operands[0];
@@ -422,7 +453,7 @@ impl CPU {
     // Команда JMP
     fn jmp(&mut self, operands: &[&str]) {
         if operands.len() != 1 {
-            panic!("JMP requires 1 operand");
+            self.regs.crash(1, "JMP requires 1 operand");
         }
 
         let target = if let Ok(addr) = operands[0].parse::<u32>() {
@@ -436,7 +467,7 @@ impl CPU {
 
     fn xor(&mut self, operands: &[&str]) {
         if operands.len() != 2 {
-            panic!("XOR requires 2 operands");
+            self.regs.crash(1, "XOR requires 2 operands");
         }
 
         let dest = operands[0];
@@ -527,14 +558,7 @@ fn main() {
 
     // Выводим состояние регистров после выполнения
     println!("Registers after execution:");
-    println!("EAX: {:08X}", cpu.regs.eax);
-    println!("EBX: {:08X}", cpu.regs.ebx);
-    println!("ECX: {:08X}", cpu.regs.ecx);
-    println!("EDX: {:08X}", cpu.regs.edx);
-    println!("ESP: {:08X}", cpu.regs.esp);
-    println!("EBP: {:08X}", cpu.regs.ebp);
-    println!("EIP: {:08X}", cpu.regs.eip);
-    println!("EFLAGS: {:08X}", cpu.regs.eflags);
+    cpu.regs.tracing();
     println!("memory: {:?}", cpu.memory);
     println!("read mem: {:?}", &mem);
     println!("Exit code: {:08X}", cpu.regs.ebx);
@@ -612,5 +636,15 @@ mod test {
         // Смещение на 3 потому что под hellow world выделилось 16 байт, а сама строка занимает 13
         // байт, а значит остается еще 3 байта свободных в виде нулей.
         assert_eq!(cpu.read_memory(13 + 3, 4), "hi!\n".as_bytes());
+    }
+
+    #[ignore = "Принудительно упадет с memory access of bounds"]
+    #[test]
+    fn tracing_regs() {
+        let mut cpu = CPU::new(0);
+
+        let program = ["section .bss huy resb 8", "start:"];
+
+        cpu.run(&program);
     }
 }
