@@ -131,6 +131,93 @@ impl Section {
     }
 }
 
+fn parse_data_section(items: &[&str]) -> Vec<u8> {
+    if items.is_empty() {
+        return vec![];
+    }
+
+    let mut result = Vec::new();
+    let mut i = 0;
+    let mut is_string = false;
+
+    while i < items.len() {
+        // Проверяем, что у нас есть как минимум два элемента (тип и значение)
+        if i + 1 >= items.len() {
+            break;
+        }
+
+        let data_type = items[i];
+        let value = items[i + 1];
+
+        if !is_string {
+            is_string = value.starts_with('"');
+        }
+
+        match data_type {
+            "db" => {
+                // Define Byte (8 bit)
+                // String?
+                if is_string {
+                    let mut j = 0;
+                    for value in &items[i + 1..] {
+                        let value = value.replace('"', "");
+                        result.extend_from_slice(value.as_bytes());
+
+                        if j < items.len() - i - 2 {
+                            result.push(32);
+                        }
+                        j += 1;
+                    }
+                } else {
+                    let byte_value = parse_number(value).expect("Invalid byte value");
+                    result.push(byte_value as u8);
+                }
+                i += 2;
+            }
+            "dw" => {
+                // Define Word (16 bit)
+                let word_value = parse_number(value).expect("Invalid word value");
+                result.extend_from_slice(&(word_value as u16).to_le_bytes());
+                i += 2;
+            }
+            "dd" => {
+                // Define Double Word (32 bit)
+                let dword_value = parse_number(value).expect("Invalid dword value");
+                result.extend_from_slice(&(dword_value as u32).to_le_bytes());
+                i += 2;
+            }
+            "dq" => {
+                // Define Quad Word (64 bit)
+                let qword_value = parse_number(value).expect("Invalid qword value");
+                result.extend_from_slice(&(qword_value as u64).to_le_bytes());
+                i += 2;
+            }
+            _ => {
+                // Неизвестный тип данных, пропускаем
+                i += 1;
+            }
+        }
+    }
+
+    result
+}
+
+fn parse_number(value: &str) -> Result<u64, std::num::ParseIntError> {
+    if value.starts_with("0x") {
+        // hex
+        u64::from_str_radix(&value[2..], 16)
+    } else if value.starts_with("0b") {
+        // Двоичное значение
+        u64::from_str_radix(&value[2..], 2)
+    } else if value.starts_with("0") && value.len() > 1 {
+        // Восьмеричное значение
+        u64::from_str_radix(&value[1..], 8)
+    } else {
+        // Десятичное значение
+        value.parse::<u64>()
+    }
+}
+
 // Состояние процессора
 struct CPU {
     regs: Registers,
@@ -221,13 +308,17 @@ impl CPU {
             }
 
             ".data" => {
-                // TODO: Сделать парсинг инициализированных данных
-                //let values = parse_data_section(&section[2..]);
+                // Парсим секцию данных
+                let values = if section.len() > 2 {
+                    parse_data_section(&section[2..])
+                } else {
+                    vec![]
+                };
 
                 self.sections.push(Section::Data {
                     name: section[1].to_string(),
                     res: SectionRes::resb, // По умолчанию, можно уточнять
-                    values: vec![],
+                    values,
                     start_addr: 0,
                 });
             }
@@ -646,5 +737,40 @@ mod test {
         let program = ["section .bss huy resb 8", "start:"];
 
         cpu.run(&program);
+    }
+
+    #[test]
+    fn test_data_section() {
+        let mut cpu = CPU::new(32);
+
+        let program = [
+            "section .data message db \"Hello, World!\"",
+            "section .data numbers db 10 db 20 db 30",
+            "start:",
+            "mov eax 1",
+            "mov ebx 0",
+            "syscall",
+        ];
+
+        cpu.run(&program);
+
+        assert_eq!(cpu.sections.len(), 2);
+
+        let message_section = cpu.sections.iter().find(|s| s.name() == "message").unwrap();
+        let numbers_section = cpu.sections.iter().find(|s| s.name() == "numbers").unwrap();
+
+        match message_section {
+            Section::Data { values, .. } => {
+                assert_eq!(values, &"Hello, World!".as_bytes().to_vec());
+            }
+            _ => panic!("Expected Data section"),
+        }
+
+        match numbers_section {
+            Section::Data { values, .. } => {
+                assert_eq!(values, &vec![10, 20, 30]);
+            }
+            _ => panic!("Expected Data section"),
+        }
     }
 }
