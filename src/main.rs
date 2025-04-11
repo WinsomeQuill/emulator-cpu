@@ -158,15 +158,13 @@ fn parse_data_section(items: &[&str]) -> Vec<u8> {
                 // Define Byte (8 bit)
                 // String?
                 if is_string {
-                    let mut j = 0;
-                    for value in &items[i + 1..] {
+                    for (j, value) in items[i + 1..].iter().enumerate() {
                         let value = value.replace('"', "");
                         result.extend_from_slice(value.as_bytes());
 
                         if j < items.len() - i - 2 {
                             result.push(32);
                         }
-                        j += 1;
                     }
                 } else {
                     let byte_value = parse_number(value).expect("Invalid byte value");
